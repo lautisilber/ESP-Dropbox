@@ -1,9 +1,13 @@
+#define DEBUG
+
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include "dropboxSDK.hpp"
 
-const char* ssid = "SSID";
-const char* password = "PASSWORD";
+#define TOKEN "UJgqSwguqmQAAAAAAAAAAd2QXMKlLN_bjOWZtkSEH7aNmXwbSbMcmiCkkQnDjDF3"
+
+const char* ssid = "Wifi-Casa";
+const char* password = "canotaje";
 
 Dropbox dbx;
 
@@ -19,10 +23,37 @@ void setup() {
   }
  
   Serial.println("Connected to the WiFi network");
+
+  char *msg = "Hola. Comote va, capo? sos muy crack";
+  size_t msgLen = strlen(msg);
+
+
+  dbx.begin(TOKEN);
+  delay(2000);
+  Serial.println("uploading file");
+  dbx.uploadString(msg, msgLen, "/otherFolder/moko.txt");
+  Serial.println("done");
+
+/*
+  Serial.println("sending...");
+    if ((WiFi.status() == WL_CONNECTED)) {
+
+        HTTPClient http;
+        http.begin("https://content.dropboxapi.com/2/files/upload", Dropbox::root_ca);
+        http.addHeader("Authorization", String("Bearer ") + String(TOKEN));
+        http.addHeader("Dropbox-API-Arg", "{\"path\": \"/makalaka/molo.txt\",\"mode\": \"add\",\"autorename\": true,\"mute\": false,\"strict_conflict\": false}");
+        http.addHeader("Content-Type", "text/plain; charset=dropbox-cors-hack");
+        int statusCode = http.POST((uint8_t *)msg, msgLen);
+
+        Serial.println(statusCode);
+        Serial.println(http.getString());
+
+        http.end();
+    }
+   Serial.println("done");
+  */ 
 }
  
 void loop() {
-  Serial.print("Testing dbx connection... ");
-  Serial.println(dbx.test());
   delay(5000);
 }

@@ -1,9 +1,17 @@
 #pragma once
 
+
+#ifdef DEBUG
+#define PRINT(...) Serial.printf(__VA_ARGS__)
+#else
+#define PRINT(...)
+#endif
+
+
 #include <Arduino.h>
 #include <WiFi.h>
 #include <HTTPClient.h>
-#include <ArduinoJson.h>
+#include <FS.h>
 
 
 #define DBX_RESPONSE_MAX_SIZE 2048
@@ -17,6 +25,7 @@
 
 #define HTTPS_HEADER_KEY_MAX_SIZE 32
 #define HTTPS_HEADER_VALUE_MAX_SIZE 128
+#define HTTPS_MAX_BATCH_SIZE 1500
 
 
 class Header {
@@ -25,7 +34,7 @@ private:
     char _value[HTTPS_HEADER_VALUE_MAX_SIZE];
     bool _inUse = false;
 public:
-    Header(/* args */) {
+    Header() {
         memset(_key, HTTPS_HEADER_KEY_MAX_SIZE, '\0');
         memset(_value, HTTPS_HEADER_VALUE_MAX_SIZE, '\0');
     }
@@ -49,6 +58,7 @@ public:
         setKey(key);
         setValue(value);
         _inUse = use;
+        PRINT("Setting header. key: '%s'. value: '%s'\n", key, value);
     }
     const char* getKey() { return _key; }
     const char* getValue() { return _value; }
@@ -57,7 +67,7 @@ public:
 
 class Dropbox {
 private:
-    char _token[64];
+    char _token[DBX_TOKEN_SIZE];
     char _url[DBX_URL_MAX_SIZE] = "";
     int _statusCode = 0;
     char _response[DBX_RESPONSE_MAX_SIZE] = "";
@@ -68,20 +78,21 @@ public:
     Dropbox();
     ~Dropbox();
 
-    void begin(const char *token) { strncpy(_token, "Bearer ", 7); strncat(_token, token, DBX_TOKEN_SIZE-8); }
+    void begin(const char *token);
 
     void setPath(const char *path);
     bool test();
     bool uploadString(char *content, size_t size, const char *path=nullptr);
+    bool uploadFile(fs::FS &fs, const char *localPath, const char *remotePath);
 
 private:
     bool get();
     bool post(uint8_t *payload, size_t size);
-    void setURL(const char *relativeURL);ç
+    void setURL(const char *relativeURL);
     void setHeader(const char *key, const char *value, size_t index);
     void deactivateHeader(int index=-1);
 
-private:
+public: // TODO: change back to private
     static constexpr char *root_ca PROGMEM = R"rawliteral(-----BEGIN CERTIFICATE-----
 MIIGXzCCBUegAwIBAgIQAkuvMgi2l3dyPfgpr40frTANBgkqhkiG9w0BAQsFADBw
 MQswCQYDVQQGEwJVUzEVMBMGA1UEChMMRGlnaUNlcnQgSW5jMRkwFwYDVQQLExB3
@@ -181,12 +192,18 @@ Dropbox::Dropbox() {
 Dropbox::~Dropbox() {
 }
 
+void Dropbox::begin(const char *token) {
+    strncpy(_token, "Bearer ", 8);
+    strncat(_token, token, DBX_TOKEN_SIZE-8);
+    PRINT("The token plus the bearer string stored are: '%s'\n", _token);
+}
+
 void Dropbox::setHeader(const char *key, const char *value, size_t index) {
     if (index >= DBX_MAX_HEADERS) return;
     _headers[index].setHeader(key, value, true);
 }
 
-void Dropbox::deactivateHeader(int index=-1) {
+void Dropbox::deactivateHeader(int index) {
     if (index < 0) {
         for (size_t i = 0; i < DBX_MAX_HEADERS; i++) {
             _headers[i].use(false);
@@ -216,6 +233,13 @@ bool Dropbox::get() {
         }
         http.end();
     }
+
+    #ifdef DEBUG
+    if (!(_statusCode >= 200 && _statusCode < 300)) {
+        PRINT("Error on 'get' function\ncode: %i\nresponse: %s\n", _statusCode, _response);
+    }
+    #endif
+    
     return _statusCode >= 200 && _statusCode < 300;
 }
 
@@ -240,12 +264,26 @@ bool Dropbox::post(uint8_t *payload, size_t size) {
         }
         http.end();
     }
+
+    #ifdef DEBUG
+    if (!(_statusCode >= 200 && _statusCode < 300)) {
+        PRINT("Error on 'post' function\ncode: %i\nresponse: %s\n", _statusCode, _response);
+    }
+    #endif
+    
     return _statusCode >= 200 && _statusCode < 300;
 }
 
 void Dropbox::setPath(const char *path) {
     memset(_path, DBX_PATH_MAX_SIZE, '\0');
-    strcpy(_path, path, DBX_PATH_MAX_SIZE);
+    if (path[0] == '/') {
+        strncpy(_path, path, DBX_PATH_MAX_SIZE);
+    } else {
+        strcpy(_path, "/");
+        strncat(_path, path, DBX_PATH_MAX_SIZE-1);
+    }
+
+    PRINT("Setting path to '%s'\n", _path);
 }
 
 void Dropbox::setURL(const char *relativeURL) {
@@ -255,29 +293,84 @@ void Dropbox::setURL(const char *relativeURL) {
         strcat(_url, "/");
     }
     strncat(_url, relativeURL, DBX_RELATIVE_URL_MAX_SIZE);
+
+    PRINT("Setting url to '%s'\n", _url);
 }
 
 bool Dropbox::test() {
     setURL("/");
-    return = get();
+    
+    PRINT("Testing connection... ");
+    bool success = get();
+    PRINT("%s\n", (success ? "success" : "error"));
+    #ifdef DEBUG
+    if (!success) {
+        PRINT("status code: %i\nresponse: %s\n", _statusCode, _response);
+    }
+    #endif
+    return success;
 }
 
 bool Dropbox::uploadString(char *content, size_t size, const char *path) {
-    StaticJsonDocument json<192>;
-    json["path"] = _path;
-    json["mode"] = "overwrite";
-    json["autorename"] = true;
-    json["mute"] = false;
-    json["strict_conflict"] = false;
-    char dbxArguments[256];
-    serializeJson(json, dbxArguments, 256);
-
     setURL("/files/upload");
+    if (path != nullptr)
+        setPath(path);
+  
+    char dbxArguments[192];
+    //memset(dbxArguments, 192, '\0');
+    snprintf(dbxArguments, 192, "{\"path\":\"%s\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}", _path);
+    //strcpy(dbxArguments, "{\"path\":\"");
+    //strcat(dbxArguments, _path);
+    //strcat(dbxArguments, "\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}");
+
     deactivateHeader();
     _headers[0].setHeader("Authorization", _token);
     _headers[1].setHeader("Dropbox-API-Arg", dbxArguments);
-    _headers[2].setHeader("Content-Type", "application/octet-stream");
+    _headers[2].setHeader("Content-Type", "text/plain; charset=dropbox-cors-hack");
 
-    bool success = post(content, size);
+    bool success = post((uint8_t *)content, size);
     return success;
+}
+
+bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePath) {
+    if ((WiFi.status() != WL_CONNECTED)) {
+        PRINT("Not connected to WiFi\n");
+        return false;
+    }
+
+    char dbxArguments[192];
+    snprintf(dbxArguments, 192, "{\"path\":\"%s\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}", _path);
+    
+    File file = fs.open(localPath);
+    if (!file) {
+        PRINT("failed to read file '%s' for dbx uploading\n", localPath);
+        return false;
+    }
+
+    memset(_response, DBX_RESPONSE_MAX_SIZE, '\0');
+    
+    HTTPClient http;
+    http.begin(_url, Dropbox::root_ca);
+    http.addHeader("Authorization", _token);
+    http.addHeader("Dropbox-API-Arg", dbxArguments);
+    http.addHeader("Content-Type", "application/octet-stream");
+    
+    _statusCode = http.sendRequest("POST", (Stream *)&file, file.size());
+
+    file.close();
+    
+    if (_statusCode > 0) {
+        http.getString().toCharArray(_response, DBX_RESPONSE_MAX_SIZE);
+    } else {
+        strncpy(_response, DBX_ERROR_DEFAULT_RESPONSE, DBX_RESPONSE_MAX_SIZE);
+    }
+    http.end();
+
+    #ifdef DEBUG
+    if (!(_statusCode >= 200 && _statusCode < 300)) {
+        PRINT("Error on 'post stream' function\ncode: %i\nresponse: %s\n", _statusCode, _response);
+    }
+    #endif
+    
+    return _statusCode >= 200 && _statusCode < 300;
 }
