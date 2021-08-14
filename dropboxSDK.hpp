@@ -83,7 +83,8 @@ public:
     void setPath(const char *path);
     bool test();
     bool uploadString(char *content, size_t size, const char *path=nullptr);
-    bool uploadFile(fs::FS &fs, const char *localPath, const char *remotePath);
+    bool uploadFile(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
+    bool uploadFileStream(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
 
 private:
     bool get();
@@ -324,22 +325,73 @@ bool Dropbox::uploadString(char *content, size_t size, const char *path) {
     //strcat(dbxArguments, "\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}");
 
     deactivateHeader();
-    _headers[0].setHeader("Authorization", _token);
-    _headers[1].setHeader("Dropbox-API-Arg", dbxArguments);
-    _headers[2].setHeader("Content-Type", "text/plain; charset=dropbox-cors-hack");
+    setHeader("Authorization", _token, 0);
+    setHeader("Dropbox-API-Arg", dbxArguments, 1);
+    setHeader("Content-Type", "text/plain; charset=dropbox-cors-hack", 2);
 
     bool success = post((uint8_t *)content, size);
     return success;
 }
 
-bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePath) {
+bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePath=nullptr) {
     if ((WiFi.status() != WL_CONNECTED)) {
         PRINT("Not connected to WiFi\n");
         return false;
     }
 
+    if (remotePath != nullptr)
+        setPath(remotePath);
+
+    char buff[HTTPS_MAX_BATCH_SIZE+1];
+    memset(buff, HTTPS_MAX_BATCH_SIZE+1, '\0');
+
+    File file = fs.open(localPath);
+    if (!file) {
+        PRINT("failed to read file '%s' for dbx uploading\n", localPath);
+        return false;
+    }
+
+    size_t fileSize = file.size();
+
+    if (fileSize <= HTTPS_MAX_BATCH_SIZE) {
+        file.read(buff, HTTPS_MAX_BATCH_SIZE);
+        uploadString(buff, strlen(buff));
+    } else if (fileSize <= HTTPS_MAX_BATCH_SIZE*2) {
+
+    }
+
+    deactivateHeader();
+    setHeader("Authorization", _token, 0);
+    setHeader("Content-Type", "text/plain; charset=dropbox-cors-hack", 1);
+
+    
+
+    setHeader("Dropbox-API-Arg", dbxArguments, 2);
+}
+
+bool Dropbox::uploadFileStream(fs::FS &fs, const char *localPath, const char *remotePath) {
+    if ((WiFi.status() != WL_CONNECTED)) {
+        PRINT("Not connected to WiFi\n");
+        return false;
+    }
+
+    if (remotePath != nullptr)
+        setPath(remotePath);
+
     char dbxArguments[192];
     snprintf(dbxArguments, 192, "{\"path\":\"%s\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}", _path);
+
+    File fRead = fs.open(localPath);
+    if(!fRead || fRead.isDirectory()){
+        Serial.println("failed to open file for reading");
+        return false;
+    }
+
+    Serial.println("Reading FILE");
+    while(fRead.available()){
+        Serial.write(fRead.read());
+    }
+    fRead.close();
     
     File file = fs.open(localPath);
     if (!file) {
