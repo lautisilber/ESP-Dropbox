@@ -3,6 +3,7 @@
 #include <WiFi.h>
 #include <HTTPClient.h>
 #include "dropboxSDK.hpp"
+#include <SPIFFS.h>
 
 #define TOKEN "UJgqSwguqmQAAAAAAAAAAd2QXMKlLN_bjOWZtkSEH7aNmXwbSbMcmiCkkQnDjDF3"
 
@@ -13,7 +14,11 @@ Dropbox dbx;
 
 void setup() {
   Serial.begin(115200);
-  delay(1000);
+  
+  if(!SPIFFS.begin()){
+        Serial.println("SPIFFS Mount Failed");
+        return;
+    }
  
   WiFi.begin(ssid, password); 
  
@@ -31,7 +36,9 @@ void setup() {
   dbx.begin(TOKEN);
   delay(2000);
   Serial.println("uploading file");
-  dbx.uploadString(msg, msgLen, "/otherFolder/moko.txt");
+  //dbx.uploadString(msg, msgLen, "/otherFolder/moko.txt");
+  bool success = dbx.uploadFile(SPIFFS, "/beemovie.txt", "/mitulo/ratules.txt");
+  Serial.println((success ? "successful" : "error"));
   Serial.println("done");
 
 /*
