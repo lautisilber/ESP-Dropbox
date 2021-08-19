@@ -27,6 +27,8 @@
 #define DBX_PATH_MAX_SIZE 128
 #define DBX_MAX_HEADERS 8
 
+#define MAX_FILE_BUFF 4096
+
 #define HTTPS_HEADER_KEY_MAX_SIZE 32
 #define HTTPS_HEADER_VALUE_MAX_SIZE 128
 #define HTTPS_MAX_BATCH_SIZE 1500
@@ -87,6 +89,7 @@ public:
     bool test();
     bool uploadString(char *content, size_t size, const char *path=nullptr);
     bool uploadFile(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
+    bool uploadFileLarge(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
     //bool uploadFileStream(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
 
 private:
@@ -318,12 +321,8 @@ bool Dropbox::uploadString(char *content, size_t size, const char *path) {
     if (path != nullptr)
         setPath(path);
   
-    char dbxArguments[192];
-    //memset(dbxArguments, 192, '\0');
+    char dbxArguments[192] = {'\0'};
     snprintf(dbxArguments, 192, "{\"path\":\"%s\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}", _path);
-    //strcpy(dbxArguments, "{\"path\":\"");
-    //strcat(dbxArguments, _path);
-    //strcat(dbxArguments, "\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}");
 
     deactivateHeader();
     setHeader("Authorization", _token, 0);
@@ -335,6 +334,31 @@ bool Dropbox::uploadString(char *content, size_t size, const char *path) {
 }
 
 bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePath) {
+    if ((WiFi.status() != WL_CONNECTED)) {
+        PRINT("Not connected to WiFi\n");
+        return false;
+    }
+    if (remotePath != nullptr)
+        setPath(remotePath);
+
+    char buff[MAX_FILE_BUFF+1] = {'\0'};
+    File file = fs.open(localPath);
+    if (!file) {
+        PRINT("failed to read file '%s' for dbx uploading\n", localPath);
+        return false;
+    }
+    size_t fileSize = file.size();
+    if (fileSize > MAX_FILE_BUFF) {
+        PRINT("file '%s' was too big for uploading\n");
+        return false;
+    }
+    file.read((uin8_t *)buff, fileSize);
+    buff[MAX_FILE_BUFF] = '\0';
+}
+
+bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *remotePath) {
+    PRINT("not yet implemented\n");
+    return false;
     if ((WiFi.status() != WL_CONNECTED)) {
         PRINT("Not connected to WiFi\n");
         return false;
@@ -429,7 +453,7 @@ bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePa
     return success;
 }
 
-/*bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePath) {
+/*bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *remotePath) {
     if ((WiFi.status() != WL_CONNECTED)) {
         PRINT("Not connected to WiFi\n");
         return false;
