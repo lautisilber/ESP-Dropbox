@@ -222,25 +222,27 @@ void Dropbox::deactivateHeader(int index) {
 }
 
 bool Dropbox::get() {
-    if ((WiFi.status() == WL_CONNECTED)) {
-        memset(_response, DBX_RESPONSE_MAX_SIZE, '\0');
-
-        HTTPClient http;
-        http.begin(_url, Dropbox::root_ca);
-        for (size_t i = 0; i < DBX_MAX_HEADERS; i++) {
-            if (_headers[i].use()) {
-                http.addHeader(_headers[i].getKey(), _headers[i].getValue());
-            }
-        }
-        _statusCode = http.GET();
-
-        if (_statusCode > 0) {
-            http.getString().toCharArray(_response, DBX_RESPONSE_MAX_SIZE);
-        } else {
-            strncpy(_response, DBX_ERROR_DEFAULT_RESPONSE, DBX_RESPONSE_MAX_SIZE);
-        }
-        http.end();
+    if ((WiFi.status() != WL_CONNECTED)) {
+        return false;
     }
+
+    memset(_response, DBX_RESPONSE_MAX_SIZE, '\0');
+
+    HTTPClient http;
+    http.begin(_url, Dropbox::root_ca);
+    for (size_t i = 0; i < DBX_MAX_HEADERS; i++) {
+        if (_headers[i].use()) {
+            http.addHeader(_headers[i].getKey(), _headers[i].getValue());
+        }
+    }
+    _statusCode = http.GET();
+
+    if (_statusCode > 0) {
+        http.getString().toCharArray(_response, DBX_RESPONSE_MAX_SIZE);
+    } else {
+        strncpy(_response, DBX_ERROR_DEFAULT_RESPONSE, DBX_RESPONSE_MAX_SIZE);
+    }
+    http.end();
 
     #ifdef DEBUG
     if (!(_statusCode >= 200 && _statusCode < 300)) {
@@ -252,25 +254,27 @@ bool Dropbox::get() {
 }
 
 bool Dropbox::post(uint8_t *payload, size_t size) {
-    if ((WiFi.status() == WL_CONNECTED)) {
-        memset(_response, DBX_RESPONSE_MAX_SIZE, '\0');
-
-        HTTPClient http;
-        http.begin(_url, Dropbox::root_ca);
-        for (size_t i = 0; i < DBX_MAX_HEADERS; i++) {
-            if (_headers[i].use()) {
-                http.addHeader(_headers[i].getKey(), _headers[i].getValue());
-            }
-        }
-        _statusCode = http.POST(payload, size);
-
-        if (_statusCode > 0) {
-            http.getString().toCharArray(_response, DBX_RESPONSE_MAX_SIZE);
-        } else {
-            strncpy(_response, DBX_ERROR_DEFAULT_RESPONSE, DBX_RESPONSE_MAX_SIZE);
-        }
-        http.end();
+    if ((WiFi.status() != WL_CONNECTED)) {
+        return false;
     }
+
+    memset(_response, DBX_RESPONSE_MAX_SIZE, '\0');
+
+    HTTPClient http;
+    http.begin(_url, Dropbox::root_ca);
+    for (size_t i = 0; i < DBX_MAX_HEADERS; i++) {
+        if (_headers[i].use()) {
+            http.addHeader(_headers[i].getKey(), _headers[i].getValue());
+        }
+    }
+    _statusCode = http.POST(payload, size);
+
+    if (_statusCode > 0) {
+        http.getString().toCharArray(_response, DBX_RESPONSE_MAX_SIZE);
+    } else {
+        strncpy(_response, DBX_ERROR_DEFAULT_RESPONSE, DBX_RESPONSE_MAX_SIZE);
+    }
+    http.end();
 
     #ifdef DEBUG
     if (!(_statusCode >= 200 && _statusCode < 300)) {
