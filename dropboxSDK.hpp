@@ -26,12 +26,11 @@
 #define DBX_TOKEN_SIZE 64 + 8
 #define DBX_PATH_MAX_SIZE 128
 #define DBX_MAX_HEADERS 8
-
-#define MAX_FILE_BUFF 4096
+#define MAX_FILE_BUFF 3072 // 16 kbytes
 
 #define HTTPS_HEADER_KEY_MAX_SIZE 32
-#define HTTPS_HEADER_VALUE_MAX_SIZE 128
-#define HTTPS_MAX_BATCH_SIZE 1500
+#define HTTPS_HEADER_VALUE_MAX_SIZE 256
+#define HTTPS_MAX_BATCH_SIZE 2048
 
 
 class Header {
@@ -87,9 +86,12 @@ public:
 
     void setPath(const char *path);
     bool test();
+
     bool uploadString(char *content, size_t size, const char *path=nullptr);
+    char* downloadString(char *path=nullptr);
+
     bool uploadFile(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
-    bool uploadFileLarge(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
+    bool uploadFileSingleBatch(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
     //bool uploadFileStream(fs::FS &fs, const char *localPath, const char *remotePath=nullptr);
 
 private:
@@ -202,7 +204,6 @@ Dropbox::~Dropbox() {
 void Dropbox::begin(const char *token) {
     strncpy(_token, "Bearer ", 8);
     strncat(_token, token, DBX_TOKEN_SIZE-8);
-    PRINT("The token plus the bearer string stored are: '%s'\n", _token);
 }
 
 void Dropbox::setHeader(const char *key, const char *value, size_t index) {
@@ -256,7 +257,6 @@ bool Dropbox::post(uint8_t *payload, size_t size) {
 
         HTTPClient http;
         http.begin(_url, Dropbox::root_ca);
-        //http.addHeader("Content-Type", "application/json");
         for (size_t i = 0; i < DBX_MAX_HEADERS; i++) {
             if (_headers[i].use()) {
                 http.addHeader(_headers[i].getKey(), _headers[i].getValue());
@@ -289,8 +289,6 @@ void Dropbox::setPath(const char *path) {
         strcpy(_path, "/");
         strncat(_path, path, DBX_PATH_MAX_SIZE-1);
     }
-
-    PRINT("Setting path to '%s'\n", _path);
 }
 
 void Dropbox::setURL(const char *relativeURL) {
@@ -333,7 +331,23 @@ bool Dropbox::uploadString(char *content, size_t size, const char *path) {
     return success;
 }
 
-bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePath) {
+char* Dropbox::downloadString(char *path) {
+    setURL("/files/download");
+    if (path != nullptr)
+        setPath(path);
+
+    char dbxArguments[128] = {'\0'};
+    snprintf(dbxArguments, 128, "{\"path\":\"%s\"}", _path);
+
+    deactivateHeader();
+    setHeader("Authorization", _token, 0);
+    setHeader("Dropbox-API-Arg", dbxArguments, 1);
+
+    bool success = get();
+    return (success ? _response : nullptr);
+}
+
+bool Dropbox::uploadFileSingleBatch(fs::FS &fs, const char *localPath, const char *remotePath) {
     if ((WiFi.status() != WL_CONNECTED)) {
         PRINT("Not connected to WiFi\n");
         return false;
@@ -349,16 +363,20 @@ bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePa
     }
     size_t fileSize = file.size();
     if (fileSize > MAX_FILE_BUFF) {
-        PRINT("file '%s' was too big for uploading\n");
+        PRINT("file '%s' was too big for uploading\n", localPath);
         return false;
     }
-    file.read((uin8_t *)buff, fileSize);
+    size_t i = 0;
+    while (file.available() && i < MAX_FILE_BUFF) {
+        buff[i++] = (char)file.read();
+    }
     buff[MAX_FILE_BUFF] = '\0';
+
+    bool success = uploadString(buff, strlen(buff));
+    return success;
 }
 
-bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *remotePath) {
-    PRINT("not yet implemented\n");
-    return false;
+bool Dropbox::uploadFile(fs::FS &fs, const char *localPath, const char *remotePath) {
     if ((WiFi.status() != WL_CONNECTED)) {
         PRINT("Not connected to WiFi\n");
         return false;
@@ -390,7 +408,7 @@ bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *rem
         size_t offset = 0;
         char dbxArguments[256] = {'\0'};
         // start
-        PRINT("starting... ");
+        PRINT("starting (1/%u)... ", batches);
         setURL("/files/upload_session/start");
         deactivateHeader();
         setHeader("Authorization", _token, 0);
@@ -413,8 +431,8 @@ bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *rem
         PRINT("done\n");
         // append
         setURL("/files/upload_session/append_v2");
-        for (size_t i = 1; i < batches; i++) {
-            PRINT("appending (%u/%u)... ", i, batches-1);
+        for (size_t i = 1; i < batches-1; i++) {
+            PRINT("appending (%u/%u)... ", i+1, batches);
             memset(dbxArguments, 256, '\0');
             snprintf(dbxArguments, 256, "{\"cursor\":{\"session_id\":\"%s\",\"offset\":%u},\"close\":false}", sessionID, offset);
             setHeader("Dropbox-API-Arg", dbxArguments, 2);
@@ -422,27 +440,29 @@ bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *rem
             file.read((uint8_t *)buff, MIN(HTTPS_MAX_BATCH_SIZE, fileSize-offset));
             buff[HTTPS_MAX_BATCH_SIZE] = '\0';
             buffLen = strlen(buff);
-            bool success = post((uint8_t *)buff, buffLen);
+            success = post((uint8_t *)buff, buffLen);
             if (!success) {
                 PRINT("Error appending to session of id %s and offset of %u\nTried to upload '%s'\nResponse: '%s'", sessionID, offset, (char *)buff, _response);
                 return false;
             }
             offset += buffLen;
-            PRINT("done (fileSize: %u | offset: %u)\n", fileSize, offset);
+            PRINT("done\n");
         }
-        //finish
-        PRINT("Finishing... ");
+        // finish
+        PRINT("Finishing (%u/%u)... ", batches, batches);
         setURL("/files/upload_session/finish");
         memset(dbxArguments, 256, '\0');
-        snprintf(dbxArguments, 256, "{\"cursor\":{\"session_id\":\"%s\",\"offset\":%u},\"commit\":{\"path\":\"%s\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}", sessionID, offset, _path);
+        deactivateHeader();
+        setHeader("Authorization", _token, 0);
+        setHeader("Content-Type", "text/plain; charset=dropbox-cors-hack", 1);
+        snprintf(dbxArguments, 256, "{\"cursor\":{\"session_id\":\"%s\",\"offset\":%u},\"commit\":{\"path\":\"%s\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}}", sessionID, offset, _path);
         setHeader("Dropbox-API-Arg", dbxArguments, 2);
+        //setHeader("Dropbox-API-Arg", (String("{\"cursor\": {\"session_id\": \"") + String(sessionID) + String("\",\"offset\": ") + String(26/*len*/) + String("},\"commit\": {\"path\": \"/Homework/math/Matrices.txt\",\"mode\": \"add\",\"autorename\": true,\"mute\": false,\"strict_conflict\": false}}")).c_str(), 2);
         memset(buff, HTTPS_MAX_BATCH_SIZE+1, '\0');
-        //file.read((uint8_t *)buff, MIN(HTTPS_MAX_BATCH_SIZE, fileSize-offset));
-        strcpy(buff, "\n\nTERMINANDING!!!!!");
-        PRINT("last batch size: %u\n",MIN(HTTPS_MAX_BATCH_SIZE, fileSize-offset));
+        file.read((uint8_t *)buff, MIN(HTTPS_MAX_BATCH_SIZE, fileSize-offset));
         buff[HTTPS_MAX_BATCH_SIZE] = '\0';
         buffLen = strlen(buff);
-        bool success = post((uint8_t *)buff, buffLen);
+        success = post((uint8_t *)buff, buffLen);
         if (!success) {
             PRINT("Error finishing session of id %s and offset of %u\nTried to upload: '%s'\nResponse: '%s'\nfile size: %u, offset: %u, buff len: %u\n", sessionID, offset, (char *)buff, _response, fileSize, offset, buffLen);
             return false;
@@ -452,98 +472,6 @@ bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *rem
 
     return success;
 }
-
-/*bool Dropbox::uploadFileLarge(fs::FS &fs, const char *localPath, const char *remotePath) {
-    if ((WiFi.status() != WL_CONNECTED)) {
-        PRINT("Not connected to WiFi\n");
-        return false;
-    }
-
-    if (remotePath != nullptr)
-        setPath(remotePath);
-
-    char buff[HTTPS_MAX_BATCH_SIZE+1] = {'\0'};
-
-    File file = fs.open(localPath);
-    if (!file) {
-        PRINT("failed to read file '%s' for dbx uploading\n", localPath);
-        return false;
-    }
-
-    size_t fileSize = file.size();
-
-    if (fileSize <= HTTPS_MAX_BATCH_SIZE) {
-        file.read((uint8_t *)buff, HTTPS_MAX_BATCH_SIZE);
-        file.close();
-        uploadString(buff, strlen(buff));
-    } else {
-        size_t buffLen;
-        // upload_session start
-        file.read((uint8_t *)buff, HTTPS_MAX_BATCH_SIZE);
-        buff[HTTPS_MAX_BATCH_SIZE] = '\0';
-        setURL("/files/upload_session/start");
-        deactivateHeader();
-        setHeader("Authorization", _token, 0);
-        setHeader("Content-Type", "text/plain; charset=dropbox-cors-hack", 1);
-        setHeader("Dropbox-API-Arg", "{\"close\": false}", 2);
-        buffLen = strlen(buff);
-        bool success = post((uint8_t *)buff, buffLen);
-        if (!success) {
-            PRINT("Couldn't send file '%s' in batches. failed in first batch\n", localPath);
-            return false;
-        }
-        StaticJsonDocument<256> json;
-        DeserializationError err = deserializeJson(json, _response);
-        if (err) {
-            PRINT("Couldn't deserialize response json of first batched upload. Tried to deserialize '%s'\n", _response);
-            return false;
-        }
-        if (!json.containsKey("session_id")) {
-            PRINT("Received JSON doesn't contain key 'session_id'. Received '%s'\n", _response);
-            return false;
-        }
-
-        // upload_session append
-        char sessionID[32] = {'\0'}; strncpy(sessionID, json["session_id"].as<const char*>(), 32);
-        size_t offset = buffLen;
-        char dbxArguments[256] = {'\0'};
-        bool finish = false;
-        while (!finish) {
-            finish = fileSize-offset<HTTPS_MAX_BATCH_SIZE;
-            if (finish) {
-                PRINT("Finishing upload session\ndbx arguments: '%s'\nfile size: %u\ncurr offset: %u\nbuff len: %u")
-                setURL("/files/upload_session/finish");
-                snprintf(dbxArguments, 256, "{\"cursor\":{\"session_id\":\"%s\",\"offset\":%u},\"commit\":{\"path\":\"%s\",\"mode\":\"overwrite\",\"autorename\":true,\"mute\":false,\"strict_conflict\":false}", sessionID, offset, _path);
-                setHeader("Dropbox-API-Arg", dbxArguments, 2);
-                memset(buff, HTTPS_MAX_BATCH_SIZE+1, '\0');
-                file.read((uint8_t *)buff, MIN(HTTPS_MAX_BATCH_SIZE, fileSize-offset));
-                buff[HTTPS_MAX_BATCH_SIZE] = '\0';
-                buffLen = strlen(buff);
-                bool success = post((uint8_t *)buff, buffLen);
-                if (!success) {
-                    PRINT("Error finishing session of id %s and offset of %u\nTried to upload '%s'\nResponse: '%s'", sessionID, offset, (char *)buff, _response);
-                    return false;
-                }
-            } else {
-                setURL("/files/upload_session/append_v2");
-                snprintf(dbxArguments, 256, "{\"cursor\":{\"session_id\":\"%s\",\"offset\":%u},\"close\":false}", sessionID, offset);
-                memset(buff, HTTPS_MAX_BATCH_SIZE+1, '\0');
-                file.read((uint8_t *)buff, MIN(HTTPS_MAX_BATCH_SIZE, fileSize-offset));
-                buff[HTTPS_MAX_BATCH_SIZE] = '\0';
-                setHeader("Dropbox-API-Arg", dbxArguments, 2);
-                buffLen = strlen(buff);
-                bool success = post((uint8_t *)buff, buffLen);
-                if (!success) {
-                    PRINT("Error appending to session of id %s and offset of %u\nTried to upload '%s'\nResponse: '%s'", sessionID, offset, (char *)buff, _response);
-                    return false;
-                }
-            }
-            PRINT("File size: %u, offset: %u, last_loop: %s - dbxargs: %s\n", fileSize, offset, (finish ? "true" : "false"), dbxArguments);
-            offset += buffLen;
-        }
-    }
-    return _statusCode >= 200 && _statusCode < 300;
-}*/
 
 /*bool Dropbox::uploadFileStream(fs::FS &fs, const char *localPath, const char *remotePath) {
     if ((WiFi.status() != WL_CONNECTED)) {

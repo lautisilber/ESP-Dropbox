@@ -5,7 +5,7 @@
 #include "dropboxSDK.hpp"
 #include <SPIFFS.h>
 
-#define TOKEN "UJgqSwguqmQAAAAAAAAAAd2QXMKlLN_bjOWZtkSEH7aNmXwbSbMcmiCkkQnDjDF3"
+#define TOKEN "7LH8leMAXXEAAAAAAAAAAXHA7o-z13ag3B0UrOMLZ7BkpZQbMDR2RkkZcDGC2S3s"
 
 const char* ssid = "Wifi-Casa";
 const char* password = "canotaje";
@@ -29,7 +29,7 @@ void setup() {
  
   Serial.println("Connected to the WiFi network");
 
-  char *msg = "Hola. Comote va, capo? sos muy crack";
+  char *msg = "Hola. Como te va, capo? sos muy crack";
   size_t msgLen = strlen(msg);
 
 
@@ -37,8 +37,12 @@ void setup() {
   delay(2000);
   Serial.println("uploading file");
   //dbx.uploadString(msg, msgLen, "/otherFolder/moko.txt");
-  bool success = dbx.uploadFile(SPIFFS, "/beemovie.txt", "/mitulo/ratules.txt");
-  Serial.println((success ? "successful" : "error"));
+  //bool success = dbx.uploadFile(SPIFFS, "/beemovie.txt", "/mitulo/ratules.txt");
+  //bool success = dbx.uploadFile(SPIFFS, "/hola.txt", "/mitulo/pitiflauta.txt");
+  //bool success = dbx.uploadString(msg, msgLen, "/makatraka/pelele.txt");
+  char *fileContent = dbx.downloadString("/Homework/math/Matrices.txt");
+  //Serial.println((success ? "successful" : "error"));
+  Serial.println(fileContent);
   Serial.println("done");
 
 /*
